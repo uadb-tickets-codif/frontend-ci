@@ -10,6 +10,7 @@
     "test": "node --test src/lib/parse-student-csv.test.mts"
   },
   "dependencies": {
+    "geist": "^1.9.2",
     "next": "16.4.5",
     "react": "19.3.0",
     "react-dom": "19.3.0"
