@@ -25,7 +25,7 @@ pipeline {
     DOCKERHUB_USER      = 'groupe9'
     IMAGE               = "${DOCKERHUB_USER}/frontend"
     TAG                 = "1.0.${env.BUILD_NUMBER}"
-    NEXT_PUBLIC_API_URL = 'https://everyone-paying-monetize.ngrok-free.dev/'
+    NEXT_PUBLIC_API_URL = 'http://localhost:3001'
   }
 
   stages {
