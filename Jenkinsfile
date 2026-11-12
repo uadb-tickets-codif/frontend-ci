@@ -100,9 +100,8 @@ pipeline {
         }
       }
     }
-  }
 
-  stage('Déclencher le déploiement') {
+    stage('Déclencher le déploiement') {
       when { branch 'develop' }
       steps {
         build job: '/deployment-cd',
@@ -110,6 +109,7 @@ pipeline {
               parameters: [string(name: 'FRONTEND_TAG', value: env.TAG)]
       }
     }
+  }
 
   post {
     always {
