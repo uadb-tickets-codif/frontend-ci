@@ -102,6 +102,15 @@ pipeline {
     }
   }
 
+  stage('Déclencher le déploiement') {
+      when { branch 'develop' }
+      steps {
+        build job: '/deployment-cd',
+              wait: false,
+              parameters: [string(name: 'FRONTEND_TAG', value: env.TAG)]
+      }
+    }
+
   post {
     always {
       archiveArtifacts artifacts: 'npm-audit.txt, trivy-frontend.txt', allowEmptyArchive: true
