@@ -356,9 +356,9 @@ function Portal() {
         : ADMIN_NAV;
   const displayName =
     role === "student"
-      ? "Amadou Diallo"
+      ? "Penda MBAYE"
       : role === "controller"
-        ? "Aïssatou Fall"
+        ? "Youssou NDOUR"
         : "M. Ndiaye";
   const initials = role === "student" ? "AD" : role === "controller" ? "AF" : "MN";
 
