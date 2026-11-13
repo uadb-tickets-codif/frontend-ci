@@ -2,6 +2,15 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  apiRequest,
+  clearAccessToken,
+  getAccessToken,
+  setAccessToken,
+  type ApiRole,
+  type AuthUser,
+  type LoginResponse,
+} from "../lib/api";
 import { parseStudentCsv, type AdminStudent } from "../lib/parse-student-csv.mts";
 import logo from "./uadb-removebg-preview.png";
 
@@ -72,6 +81,32 @@ type IconName =
   | "calendar"
   | "bed"
   | "wifi";
+
+function getPortalRole(role: ApiRole): Role {
+  switch (role) {
+    case "STUDENT":
+      return "student";
+    case "CONTROLLER":
+      return "controller";
+    case "ADMIN":
+      return "admin";
+    default:
+      throw new Error("Le rôle reçu de l’API est invalide.");
+  }
+}
+
+function getRoleHomeScreen(role: ApiRole): Screen {
+  switch (role) {
+    case "STUDENT":
+      return "etudiant";
+    case "CONTROLLER":
+      return "controleur";
+    case "ADMIN":
+      return "admin";
+    default:
+      throw new Error("Le rôle reçu de l’API est invalide.");
+  }
+}
 
 const MEALS: { name: Meal; price: number; time: string; icon: string }[] = [
   { name: "Petit-déjeuner", price: 150, time: "07:00 – 09:00", icon: "☀" },
@@ -213,7 +248,11 @@ function QrArtwork({ compact = false }: { compact?: boolean }) {
 function Portal() {
   const [screen, setScreen] = useState<Screen>("connexion");
   const [role, setRole] = useState<Role>("student");
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [registering, setRegistering] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [toast, setToast] = useState("");
   const [balance, setBalance] = useState(4_850);
   const [tickets, setTickets] = useState(8);
@@ -241,6 +280,54 @@ function Portal() {
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
+    let active = true;
+    const handleUnauthorized = () => {
+      setUser(null);
+      setScreen("connexion");
+      setRegistering(false);
+    };
+
+    window.addEventListener("uadb:unauthorized", handleUnauthorized);
+    if (!getAccessToken()) {
+      const noSessionTimer = window.setTimeout(() => {
+        if (active) setAuthLoading(false);
+      }, 0);
+      return () => {
+        active = false;
+        window.clearTimeout(noSessionTimer);
+        window.removeEventListener("uadb:unauthorized", handleUnauthorized);
+      };
+    }
+
+    void apiRequest<AuthUser>("auth/me")
+      .then((authenticatedUser) => {
+        if (!active) return;
+        const authenticatedRole = getPortalRole(authenticatedUser.role);
+        const homeScreen = getRoleHomeScreen(authenticatedUser.role);
+        setUser(authenticatedUser);
+        setRole(authenticatedRole);
+        setScreen(homeScreen);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setToast(
+            error instanceof Error
+              ? error.message
+              : "Impossible de vérifier votre session.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setAuthLoading(false);
+      });
+
+    return () => {
+      active = false;
+      window.removeEventListener("uadb:unauthorized", handleUnauthorized);
+    };
+  }, []);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       setQrSeconds((seconds) => (seconds <= 1 ? 60 : seconds - 1));
     }, 1000);
@@ -253,7 +340,7 @@ function Portal() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const isLoggedIn = screen !== "connexion";
+  const isLoggedIn = user !== null && screen !== "connexion";
   const pageTitle =
     screen === "etudiant"
       ? "Vue d’ensemble"
@@ -286,16 +373,92 @@ function Portal() {
     setToast(message);
   }
 
-  function enterPortal(nextRole: Role) {
+  function routeToRole(apiRole: ApiRole) {
+    const nextRole = getPortalRole(apiRole);
+    const homeScreen = getRoleHomeScreen(apiRole);
     setRole(nextRole);
-    setScreen(
-      nextRole === "student"
-        ? "etudiant"
-        : nextRole === "controller"
-          ? "controleur"
-          : "admin",
-    );
+    setScreen(homeScreen);
     setRegistering(false);
+  }
+
+  function navigateToScreen(nextScreen: Screen) {
+    const allowedScreens: Record<Role, Screen[]> = {
+      student: ["etudiant", "achat", "recharge", "historique", "qr", "codification"],
+      controller: ["controleur"],
+      admin: ["admin", "dossiers", "parametres"],
+    };
+
+    if (!user || !allowedScreens[role].includes(nextScreen)) {
+      showToast("Accès refusé.");
+      return;
+    }
+    setScreen(nextScreen);
+  }
+
+  async function handleAuthSubmit(
+    event: React.FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+    setAuthError("");
+    setAuthSubmitting(true);
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const email = String(formData.get("email") ?? "").trim();
+    const password = String(formData.get("password") ?? "");
+
+    try {
+      if (registering) {
+        const gender = formData.get("gender");
+        if (gender !== "MALE" && gender !== "FEMALE") {
+          throw new Error("Sélectionnez votre genre.");
+        }
+
+        const studentNumber = String(formData.get("studentNumber") ?? "").trim();
+        await apiRequest<AuthUser>("auth/register", {
+          method: "POST",
+          authenticated: false,
+          body: JSON.stringify({
+            firstName: String(formData.get("firstName") ?? "").trim(),
+            lastName: String(formData.get("lastName") ?? "").trim(),
+            email,
+            password,
+            gender,
+            ...(studentNumber ? { studentNumber } : {}),
+          }),
+        });
+        setRegistering(false);
+        setToast("Compte créé. Vous pouvez maintenant vous connecter.");
+        form.reset();
+        return;
+      }
+
+      const result = await apiRequest<LoginResponse>("auth/login", {
+        method: "POST",
+        authenticated: false,
+        body: JSON.stringify({ email, password }),
+      });
+      routeToRole(result.user.role);
+      setAccessToken(result.accessToken);
+      setUser(result.user);
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : "Une erreur est survenue. Réessayez.",
+      );
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  function logout() {
+    clearAccessToken();
+    setUser(null);
+    setScreen("connexion");
+    setRole("student");
+    setRegistering(false);
+    setAuthError("");
   }
 
   function completePurchase(event: React.FormEvent<HTMLFormElement>) {
@@ -354,17 +517,18 @@ function Portal() {
       : role === "controller"
         ? [{ label: "Scanner un ticket", screen: "controleur" as Screen, icon: "scan" as IconName }]
         : ADMIN_NAV;
-  const displayName =
-    role === "student"
-      ? "Penda MBAYE"
-      : role === "controller"
-        ? "Youssou NDOUR"
-        : "M. Ndiaye";
-  const initials = role === "student" ? "AD" : role === "controller" ? "AF" : "MN";
+  const displayName = user ? `${user.firstName} ${user.lastName}` : "";
+  const initials = user
+    ? `${user.firstName.charAt(0)}${user.lastName.charAt(0)}`.toUpperCase()
+    : "";
 
   return (
     <>
-      {isLoggedIn ? (
+      {authLoading ? (
+        <main className="auth-loading" aria-live="polite">
+          Vérification de votre session…
+        </main>
+      ) : isLoggedIn ? (
         <div className="portal-layout">
           <aside className="sidebar">
             <a className="brand-lockup" href="#" onClick={(event) => event.preventDefault()}>
@@ -382,7 +546,7 @@ function Portal() {
                 <button
                   className={`nav-item${screen === item.screen ? " nav-item-active" : ""}`}
                   key={item.label}
-                  onClick={() => setScreen(item.screen)}
+                  onClick={() => navigateToScreen(item.screen)}
                   type="button"
                 >
                   <Icon name={item.icon} size={19} />
@@ -403,7 +567,7 @@ function Portal() {
                 </button>
               </div>
             )}
-            <button className="sidebar-logout" type="button" onClick={() => setScreen("connexion")}>
+            <button className="sidebar-logout" type="button" onClick={logout}>
               <Icon name="logout" size={18} />
               <span>Se déconnecter</span>
             </button>
@@ -422,8 +586,8 @@ function Portal() {
                 </button>
                 <div className="profile-chip">
                   <div className="avatar">{initials}</div>
-                  <div className="profile-copy"><strong>{displayName}</strong><small>{role === "student" ? "Étudiant · Master 2" : role === "controller" ? "Contrôleur · CROUS" : "Administrateur"}</small></div>
-                  <button className="profile-chevron" type="button" aria-label="Changer d’espace" onClick={() => setScreen("connexion")}><Icon name="chevron" size={16} /></button>
+                  <div className="profile-copy"><strong>{displayName}</strong><small>{role === "student" ? "Étudiant" : role === "controller" ? "Contrôleur" : "Administrateur"}</small></div>
+                  <button className="profile-chevron" type="button" aria-label="Se déconnecter" onClick={logout}><Icon name="chevron" size={16} /></button>
                 </div>
               </div>
             </header>
@@ -434,8 +598,9 @@ function Portal() {
                   balance={balance}
                   tickets={tickets}
                   transactions={transactions}
-                  onNavigate={setScreen}
-                  onSwitchRole={enterPortal}
+                  firstName={user.firstName}
+                  fullName={displayName}
+                  onNavigate={navigateToScreen}
                 />
               )}
               {screen === "achat" && (
@@ -502,8 +667,8 @@ function Portal() {
               )}
               {screen === "admin" && (
                 <AdminDashboard
-                  onNavigate={setScreen}
-                  onReview={() => setScreen("dossiers")}
+                  onNavigate={navigateToScreen}
+                  onReview={() => navigateToScreen("dossiers")}
                 />
               )}
               {screen === "dossiers" && (
@@ -517,7 +682,7 @@ function Portal() {
               )}
               {screen === "parametres" && (
                 <AdminSettings
-                  onNavigate={setScreen}
+                  onNavigate={navigateToScreen}
                   blockedRooms={blockedRooms}
                   reservedBed={bedConfirmed ? selectedBed : null}
                   onToggleRoom={(room) =>
@@ -562,8 +727,10 @@ function Portal() {
         <LoginPage
           registering={registering}
           onToggleRegister={() => setRegistering((value) => !value)}
-          onEnter={enterPortal}
-          onToast={showToast}
+          error={authError}
+          submitting={authSubmitting}
+          onSubmit={handleAuthSubmit}
+          onErrorClear={() => setAuthError("")}
         />
       )}
       {toast && <div className="toast-message" role="status"><span className="toast-check"><Icon name="check" size={16} /></span>{toast}</div>}
@@ -574,13 +741,17 @@ function Portal() {
 function LoginPage({
   registering,
   onToggleRegister,
-  onEnter,
-  onToast,
+  error,
+  submitting,
+  onSubmit,
+  onErrorClear,
 }: {
   registering: boolean;
   onToggleRegister: () => void;
-  onEnter: (role: Role) => void;
-  onToast: (message: string) => void;
+  error: string;
+  submitting: boolean;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+  onErrorClear: () => void;
 }) {
   return (
     <main className="login-page">
@@ -612,22 +783,22 @@ function LoginPage({
           <div className="eyebrow"><span className="eyebrow-dot" /> ESPACE NUMÉRIQUE</div>
           <h2>{registering ? "Créer mon compte" : "Ravi de vous revoir"}</h2>
           <p className="login-subtitle">{registering ? "Quelques informations pour commencer votre expérience." : "Connectez-vous pour accéder à vos services universitaires."}</p>
-          <form className="login-form" onSubmit={(event) => { event.preventDefault(); onToast(registering ? "Inscription non connectée au backend. Utilisez un accès rapide pour découvrir la maquette." : "Authentification non connectée au backend. Utilisez un accès rapide pour découvrir la maquette."); }}>
-            {registering && <label>Nom complet<div className="input-wrap"><Icon name="user" size={18} /><input placeholder="Ex. Amadou Diallo" required /></div></label>}
-            {registering && <label>Numéro étudiant<div className="input-wrap"><Icon name="user" size={18} /><input placeholder="Ex. 2024-01842" required /></div></label>}
-            <label>{registering ? "Adresse e-mail" : "Adresse e-mail ou numéro étudiant"}<div className="input-wrap"><Icon name="user" size={18} /><input type={registering ? "email" : "text"} placeholder={registering ? "nom@uadb.edu.sn" : "ex. 202400123 ou nom@uadb.edu.sn"} required /></div></label>
-            <label>Mot de passe<div className="input-wrap"><Icon name="shield" size={18} /><input type="password" placeholder="••••••••••" minLength={6} required /></div></label>
-            {!registering && <div className="forgot-row"><span>Connexion de démonstration</span><button type="button" onClick={() => onToast("La réinitialisation sera disponible après le raccordement au backend.")}>Mot de passe oublié ?</button></div>}
-            <button className="primary-button login-submit" type="submit">{registering ? "Créer mon compte" : "Se connecter"} <Icon name="arrow" size={17} /></button>
+          {error && <p className="auth-error" role="alert">{error}</p>}
+          <form className="login-form" onSubmit={onSubmit}>
+            {registering && <>
+              <label>Prénom<div className="input-wrap"><Icon name="user" size={18} /><input name="firstName" autoComplete="given-name" maxLength={100} required /></div></label>
+              <label>Nom<div className="input-wrap"><Icon name="user" size={18} /><input name="lastName" autoComplete="family-name" maxLength={100} required /></div></label>
+              <label>Numéro étudiant <span>(facultatif)</span><div className="input-wrap"><Icon name="user" size={18} /><input name="studentNumber" autoComplete="off" maxLength={32} /></div></label>
+            </>}
+            <label>Adresse e-mail<div className="input-wrap"><Icon name="user" size={18} /><input name="email" type="email" autoComplete="email" maxLength={254} onChange={onErrorClear} required /></div></label>
+            {registering && <label>Genre<div className="input-wrap"><Icon name="user" size={18} /><select name="gender" defaultValue="" required><option value="" disabled>Sélectionnez une option</option><option value="FEMALE">Femme</option><option value="MALE">Homme</option></select></div></label>}
+            <label>Mot de passe<div className="input-wrap"><Icon name="shield" size={18} /><input name="password" type="password" autoComplete={registering ? "new-password" : "current-password"} minLength={12} maxLength={72} onChange={onErrorClear} required /></div></label>
+            <button className="primary-button login-submit" type="submit" disabled={submitting}>
+              {submitting ? "Veuillez patienter…" : registering ? "Créer mon compte" : "Se connecter"}
+              {!submitting && <Icon name="arrow" size={17} />}
+            </button>
           </form>
-          <div className="login-switch">{registering ? "Vous avez déjà un compte ?" : "Vous êtes nouveau sur la plateforme ?"} <button type="button" onClick={onToggleRegister}>{registering ? "Se connecter" : "Créer un compte"}</button></div>
-          <div className="demo-divider"><span /> ACCÈS RAPIDE À LA MAQUETTE <span /></div>
-          <div className="demo-role-list">
-            <button type="button" onClick={() => onEnter("student")}><span className="demo-role-icon role-blue"><Icon name="user" size={17} /></span><span><strong>Espace étudiant</strong><small>Découvrir mon tableau de bord</small></span><Icon name="arrow" size={16} /></button>
-            <button type="button" onClick={() => onEnter("controller")}><span className="demo-role-icon role-green"><Icon name="scan" size={17} /></span><span><strong>Espace contrôleur</strong><small>Tester le scan des tickets</small></span><Icon name="arrow" size={16} /></button>
-            <button type="button" onClick={() => onEnter("admin")}><span className="demo-role-icon role-amber"><Icon name="chart" size={17} /></span><span><strong>Administration</strong><small>Gérer les services UADB</small></span><Icon name="arrow" size={16} /></button>
-          </div>
-          <p className="demo-note"><Icon name="shield" size={14} /> Maquette de démonstration · aucune donnée n’est transmise</p>
+          <div className="login-switch">{registering ? "Vous avez déjà un compte ?" : "Vous n’avez pas encore de compte ?"} <button type="button" onClick={() => { onErrorClear(); onToggleRegister(); }}>{registering ? "Se connecter" : "Créer un compte"}</button></div>
         </div>
       </section>
     </main>
@@ -638,19 +809,21 @@ function StudentDashboard({
   balance,
   tickets,
   transactions,
+  firstName,
+  fullName,
   onNavigate,
-  onSwitchRole,
 }: {
   balance: number;
   tickets: number;
   transactions: Transaction[];
+  firstName: string;
+  fullName: string;
   onNavigate: (screen: Screen) => void;
-  onSwitchRole: (role: Role) => void;
 }) {
   return (
     <div className="page-stack">
       <div className="welcome-row">
-        <div><div className="eyebrow"><span className="eyebrow-dot" /> {new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date()).toUpperCase()}</div><h1>Bonjour Amadou <span className="wave-emoji">✦</span></h1><p>Content de vous revoir. Voici votre espace étudiant.</p></div>
+        <div><div className="eyebrow"><span className="eyebrow-dot" /> {new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date()).toUpperCase()}</div><h1>Bonjour {firstName} <span className="wave-emoji">✦</span></h1><p>Content de vous revoir. Voici votre espace étudiant.</p></div>
         <button className="outline-button" type="button" onClick={() => onNavigate("historique")}><Icon name="clock" size={16} /> Historique</button>
       </div>
 
@@ -664,7 +837,7 @@ function StudentDashboard({
         <div className="hero-card-visual">
           <div className="campus-card">
             <div className="campus-card-top"><Image src={logo} alt="" width={31} height={31} /><span>CARTE ÉTUDIANT<br /><strong>UADB · 2026</strong></span><Icon name="wifi" size={17} /></div>
-            <div className="campus-card-name">AMADOU DIALLO</div>
+            <div className="campus-card-name">{fullName.toLocaleUpperCase("fr-FR")}</div>
             <div className="campus-card-bottom"><span>MASTER 2 · SI-SR</span><span>•••• 2048</span></div>
           </div>
           <div className="hero-sparkle sparkle-a">✳</div><div className="hero-sparkle sparkle-b">✦</div>
@@ -705,9 +878,6 @@ function StudentDashboard({
         </section>
       </div>
       <section className="notice-banner"><span className="notice-icon"><Icon name="sun" size={18} /></span><p><strong>Bon appétit !</strong> Le service du déjeuner est ouvert de 12 h à 14 h 30 au restaurant universitaire.</p><button type="button" aria-label="Fermer" onClick={(event) => event.currentTarget.parentElement?.remove()}><Icon name="close" size={17} /></button></section>
-      <div className="role-switch-row">
-        <span>Prévisualiser un autre espace (maquette) :</span><button type="button" onClick={() => onSwitchRole("controller")}>Contrôleur</button><button type="button" onClick={() => onSwitchRole("admin")}>Administration</button>
-      </div>
     </div>
   );
 }
