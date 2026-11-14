@@ -83,10 +83,10 @@ function getErrorMessage(status: number, payload?: ApiErrorPayload): string {
   return "Une erreur est survenue. Réessayez.";
 }
 
-export async function apiRequest<T>(
+async function apiFetch(
   path: string,
   options: ApiRequestOptions = {},
-): Promise<T> {
+): Promise<Response> {
   if (typeof window === "undefined") {
     throw new ApiError("Les appels à l’API sont réservés au navigateur.", 0);
   }
@@ -102,7 +102,10 @@ export async function apiRequest<T>(
   const { authenticated = true, headers: requestHeaders, ...requestOptions } =
     options;
   const headers = new Headers(requestHeaders);
-  if (typeof requestOptions.body === "string" && !headers.has("Content-Type")) {
+  if (
+    typeof requestOptions.body === "string" &&
+    !headers.has("Content-Type")
+  ) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -114,14 +117,11 @@ export async function apiRequest<T>(
   const baseUrl = `${apiUrl.replace(/\/+$/, "")}/`;
   let response: Response;
   try {
-    response = await fetch(
-      new URL(path.replace(/^\/+/, ""), baseUrl),
-      {
-        ...requestOptions,
-        cache: "no-store",
-        headers,
-      },
-    );
+    response = await fetch(new URL(path.replace(/^\/+/, ""), baseUrl), {
+      ...requestOptions,
+      cache: "no-store",
+      headers,
+    });
   } catch {
     throw new ApiError(
       "Impossible de joindre le serveur. Vérifiez votre connexion et la disponibilité de l’API.",
@@ -129,15 +129,15 @@ export async function apiRequest<T>(
     );
   }
 
-  const responseText = await response.text();
-  let payload: unknown;
-  try {
-    payload = responseText ? JSON.parse(responseText) : undefined;
-  } catch {
-    payload = undefined;
-  }
-
   if (!response.ok) {
+    const responseText = await response.text();
+    let payload: unknown;
+    try {
+      payload = responseText ? JSON.parse(responseText) : undefined;
+    } catch {
+      payload = undefined;
+    }
+
     if (response.status === 401) {
       clearAccessToken();
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
@@ -154,11 +154,28 @@ export async function apiRequest<T>(
     );
   }
 
+  return response;
+}
+
+export async function apiRequest<T>(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<T> {
+  const response = await apiFetch(path, options);
+  const responseText = await response.text();
   if (!responseText) {
     return undefined as T;
   }
-  if (payload === undefined) {
+  try {
+    return JSON.parse(responseText) as T;
+  } catch {
     throw new ApiError("Réponse invalide reçue du serveur.", response.status);
   }
-  return payload as T;
+}
+
+export function apiRequestBlob(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<Blob> {
+  return apiFetch(path, options).then((response) => response.blob());
 }

@@ -12,6 +12,7 @@ import {
   type LoginResponse,
 } from "../lib/api";
 import { parseStudentCsv, type AdminStudent } from "../lib/parse-student-csv.mts";
+import BusinessPages from "./business-pages";
 import logo from "./uadb-removebg-preview.png";
 
 type Role = "student" | "controller" | "admin";
@@ -109,9 +110,9 @@ function getRoleHomeScreen(role: ApiRole): Screen {
 }
 
 const MEALS: { name: Meal; price: number; time: string; icon: string }[] = [
-  { name: "Petit-déjeuner", price: 150, time: "07:00 – 09:00", icon: "☀" },
-  { name: "Déjeuner", price: 300, time: "12:00 – 14:30", icon: "◉" },
-  { name: "Dîner", price: 250, time: "19:00 – 21:00", icon: "☾" },
+  { name: "Petit-déjeuner", price: 50, time: "07:00 – 09:00", icon: "☀" },
+  { name: "Déjeuner", price: 100, time: "12:00 – 14:30", icon: "◉" },
+  { name: "Dîner", price: 100, time: "19:00 – 21:00", icon: "☾" },
 ];
 
 const DEMO_ROOMS: DemoRoom[] = [
@@ -123,6 +124,7 @@ const DEMO_ROOMS: DemoRoom[] = [
 const STUDENT_NAV: { label: string; screen: Screen; icon: IconName }[] = [
   { label: "Vue d’ensemble", screen: "etudiant", icon: "grid" },
   { label: "Acheter un ticket", screen: "achat", icon: "ticket" },
+  { label: "Recharger le portefeuille", screen: "recharge", icon: "wallet" },
   { label: "Historique", screen: "historique", icon: "clock" },
   { label: "Mon QR code", screen: "qr", icon: "qr" },
   { label: "Codification", screen: "codification", icon: "building" },
@@ -254,30 +256,6 @@ function Portal() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
   const [toast, setToast] = useState("");
-  const [balance, setBalance] = useState(4_850);
-  const [tickets, setTickets] = useState(8);
-  const [meal, setMeal] = useState<Meal>("Déjeuner");
-  const [quantity, setQuantity] = useState(2);
-  const [paymentMethod, setPaymentMethod] = useState("Wave");
-  const [paymentOutcome, setPaymentOutcome] = useState<"success" | "failure">("success");
-  const [purchaseComplete, setPurchaseComplete] = useState(false);
-  const [transactions, setTransactions] = useState<Transaction[]>([
-    { id: 3, description: "Déjeuner acheté", date: "Aujourd’hui · 10:42", type: "ticket", amount: -300, successful: true },
-    { id: 2, description: "Repas consommé · Dîner", date: "Hier · 19:26", type: "repas", amount: 0, successful: true },
-    { id: 1, description: "Recharge portefeuille", date: "4 nov. · 09:12", type: "recharge", amount: 2_000, successful: true },
-  ]);
-  const [rechargeAmount, setRechargeAmount] = useState(2_000);
-  const [qrSeconds, setQrSeconds] = useState(42);
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [scanLog, setScanLog] = useState<ScanResult[]>(["valid", "used"]);
-  const [selectedBed, setSelectedBed] = useState<string | null>(null);
-  const [bedConfirmed, setBedConfirmed] = useState(false);
-  const [blockedRooms, setBlockedRooms] = useState<string[]>([]);
-  const [codificationOpen, setCodificationOpen] = useState(true);
-  const [rejectionReason, setRejectionReason] = useState("");
-  const [mealPrices, setMealPrices] = useState([150, 300, 250]);
-  const [nonScholarMealPrices, setNonScholarMealPrices] = useState([300, 600, 500]);
-  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -328,13 +306,6 @@ function Portal() {
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setQrSeconds((seconds) => (seconds <= 1 ? 60 : seconds - 1));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 3200);
     return () => window.clearTimeout(timer);
@@ -363,11 +334,6 @@ function Portal() {
                   : screen === "parametres"
                     ? "Configuration"
                     : "Connexion";
-
-  const activeMeal = MEALS.find((item) => item.name === meal) ?? MEALS[1];
-  const selectedMealIndex = MEALS.findIndex((item) => item.name === meal);
-  const currentPrice = mealPrices[selectedMealIndex] ?? activeMeal.price;
-  const total = currentPrice * quantity;
 
   function showToast(message: string) {
     setToast(message);
@@ -461,56 +427,6 @@ function Portal() {
     setAuthError("");
   }
 
-  function completePurchase(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (paymentMethod === "Portefeuille" && balance < total) {
-      showToast("Solde insuffisant. Choisissez un autre mode de paiement.");
-      return;
-    }
-    if (paymentOutcome === "failure") {
-      setPurchaseComplete(false);
-      setTransactions((current) => [
-        { id: Date.now(), description: `Achat · ${meal}`, date: "À l’instant", type: "ticket", amount: -total, successful: false },
-        ...current,
-      ]);
-      showToast("Paiement refusé dans cette simulation. Aucun ticket ni montant n’a été débité.");
-      return;
-    }
-    if (paymentMethod === "Portefeuille") {
-      setBalance((amount) => amount - total);
-    }
-    setTickets((count) => count + quantity);
-    setPurchaseComplete(true);
-    setTransactions((current) => [
-      { id: Date.now(), description: `Achat de ${quantity} ticket${quantity > 1 ? "s" : ""} · ${meal}`, date: "À l’instant", type: "ticket", amount: -total, successful: true },
-      ...current,
-    ]);
-    showToast("Achat simulé avec succès. Vos tickets sont prêts !");
-  }
-
-  function completeRecharge(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (paymentOutcome === "failure") {
-      setTransactions((current) => [
-        { id: Date.now(), description: "Recharge du portefeuille", date: "À l’instant", type: "recharge", amount: rechargeAmount, successful: false },
-        ...current,
-      ]);
-      showToast("Recharge refusée dans cette simulation. Votre solde n’a pas changé.");
-      return;
-    }
-    setBalance((amount) => amount + rechargeAmount);
-    setTransactions((current) => [
-      { id: Date.now(), description: "Recharge du portefeuille", date: "À l’instant", type: "recharge", amount: rechargeAmount, successful: true },
-      ...current,
-    ]);
-    showToast(`Recharge simulée de ${currency(rechargeAmount)} effectuée.`);
-  }
-
-  function simulateScan(result: ScanResult) {
-    setScanResult(result);
-    setScanLog((entries) => [result, ...entries].slice(0, 5));
-  }
-
   const navItems =
     role === "student"
       ? STUDENT_NAV
@@ -593,133 +509,11 @@ function Portal() {
             </header>
 
             <main className="main-content">
-              {screen === "etudiant" && (
-                <StudentDashboard
-                  balance={balance}
-                  tickets={tickets}
-                  transactions={transactions}
-                  firstName={user.firstName}
-                  fullName={displayName}
-                  onNavigate={navigateToScreen}
-                />
-              )}
-              {screen === "achat" && (
-                <PurchasePage
-                  balance={balance}
-                  meal={meal}
-                  onMealChange={setMeal}
-                  quantity={quantity}
-                  onQuantityChange={setQuantity}
-                  paymentMethod={paymentMethod}
-                  onPaymentChange={setPaymentMethod}
-                  currentPrice={currentPrice}
-                  total={total}
-                  completed={purchaseComplete}
-                  paymentOutcome={paymentOutcome}
-                  onPaymentOutcomeChange={setPaymentOutcome}
-                  onSubmit={completePurchase}
-                />
-              )}
-              {screen === "recharge" && (
-                <RechargePage
-                  balance={balance}
-                  amount={rechargeAmount}
-                  onAmountChange={setRechargeAmount}
-                  paymentMethod={paymentMethod}
-                  onPaymentChange={setPaymentMethod}
-                  outcome={paymentOutcome}
-                  onOutcomeChange={setPaymentOutcome}
-                  onSubmit={completeRecharge}
-                />
-              )}
-              {screen === "historique" && <HistoryPage transactions={transactions} />}
-              {screen === "qr" && (
-                <QrPage
-                  balance={balance}
-                  seconds={qrSeconds}
-                  onRefresh={() => setQrSeconds(60)}
-                />
-              )}
-              {screen === "codification" && (
-                <CodificationPage
-                  selectedBed={selectedBed}
-                  onSelectBed={(bed) => {
-                    setSelectedBed(bed);
-                    setBedConfirmed(false);
-                  }}
-                  confirmed={bedConfirmed}
-                  blockedRooms={blockedRooms}
-                  onConfirm={() => {
-                    if (!selectedBed) return;
-                    setBedConfirmed(true);
-                    showToast(`Votre lit ${selectedBed} est réservé dans cette maquette.`);
-                  }                  }
-                  onToast={showToast}
-                  isOpen={codificationOpen}
-                />
-              )}
-              {screen === "controleur" && (
-                <ControllerPage
-                  scanResult={scanResult}
-                  scanLog={scanLog}
-                  onScan={simulateScan}
-                />
-              )}
-              {screen === "admin" && (
-                <AdminDashboard
-                  onNavigate={navigateToScreen}
-                  onReview={() => navigateToScreen("dossiers")}
-                />
-              )}
-              {screen === "dossiers" && (
-                <AdminDossiers
-                  query={searchQuery}
-                  onQueryChange={setSearchQuery}
-                  rejectionReason={rejectionReason}
-                  onRejectionReasonChange={setRejectionReason}
-                  onToast={showToast}
-                />
-              )}
-              {screen === "parametres" && (
-                <AdminSettings
-                  onNavigate={navigateToScreen}
-                  blockedRooms={blockedRooms}
-                  reservedBed={bedConfirmed ? selectedBed : null}
-                  onToggleRoom={(room) =>
-                    {
-                      const isBlocked = blockedRooms.includes(room);
-                      if (!isBlocked && bedConfirmed && selectedBed?.startsWith(`${room}-`)) {
-                        showToast(`La chambre ${room} ne peut pas être bloquée tant qu’un lit est réservé.`);
-                        return;
-                      }
-                      setBlockedRooms((current) =>
-                        isBlocked
-                          ? current.filter((blockedRoom) => blockedRoom !== room)
-                          : [...current, room],
-                      );
-                      if (!isBlocked && selectedBed?.startsWith(`${room}-`)) {
-                        setSelectedBed(null);
-                        setBedConfirmed(false);
-                      }
-                    }
-                  }
-                  prices={mealPrices}
-                  nonScholarPrices={nonScholarMealPrices}
-                  onPriceChange={(index, value) =>
-                    setMealPrices((current) =>
-                      current.map((price, i) => (i === index ? value : price)),
-                    )
-                  }
-                  onNonScholarPriceChange={(index, value) =>
-                    setNonScholarMealPrices((current) =>
-                      current.map((price, i) => (i === index ? value : price)),
-                    )
-                  }
-                  isOpen={codificationOpen}
-                  onOpenChange={setCodificationOpen}
-                  onToast={showToast}
-                />
-              )}
+              <BusinessPages
+                screen={screen as Exclude<Screen, "connexion">}
+                user={user}
+                onNavigate={(nextScreen) => navigateToScreen(nextScreen)}
+              />
             </main>
           </div>
         </div>
