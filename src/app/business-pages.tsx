@@ -266,7 +266,7 @@ function CodificationPage({ user }: { user: AuthUser }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [gender, setGender] = useState<"MALE" | "FEMALE" | "">("");
+  const gender = user.gender;
   const beds = useLoad(useCallback(() => getBeds({ gender: gender || undefined, status: "AVAILABLE" }), [gender]));
 
   async function verify(event: React.FormEvent<HTMLFormElement>) {
@@ -327,9 +327,7 @@ function CodificationPage({ user }: { user: AuthUser }) {
       </form>
       <section className="content-card">
         <h2>3. Choisir un lit</h2>
-        <label>Genre du pavillon
-          <select value={gender} onChange={(event) => setGender(event.target.value as typeof gender)}><option value="">Tous</option><option value="FEMALE">Femme</option><option value="MALE">Homme</option></select>
-        </label>
+        <p>Les lits affichés correspondent aux pavillons réservés à votre genre.</p>
         {beds.loading ? <p>Chargement des lits…</p> : beds.error ? <ErrorMessage>{beds.error}</ErrorMessage> : beds.data?.length ? beds.data.map((bed) => <article className="transaction-row" key={bed.id}>
           <span>{bed.room.pavilion.name} · étage {bed.room.floor} · chambre {bed.room.number} · lit {bed.label}</span>
           <button className="outline-button" type="button" onClick={() => void chooseBed(bed)}>Réserver</button>

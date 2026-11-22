@@ -68,17 +68,17 @@ function getErrorMessage(status: number, payload?: ApiErrorPayload): string {
   if (status === 409) {
     return "Cette adresse e-mail ou ce numéro étudiant est déjà utilisé.";
   }
-  if (status >= 500) {
-    return "Le service est temporairement indisponible. Réessayez plus tard.";
-  }
-  if (status === 400 || status === 422) {
-    return "Les informations saisies sont invalides. Vérifiez les champs.";
-  }
   if (typeof payload?.message === "string") {
     return payload.message;
   }
   if (Array.isArray(payload?.message)) {
     return payload.message.join(" ");
+  }
+  if (status >= 500) {
+    return "Le service est temporairement indisponible. Réessayez plus tard.";
+  }
+  if (status === 400 || status === 422) {
+    return "Les informations saisies sont invalides. Vérifiez les champs.";
   }
   return "Une erreur est survenue. Réessayez.";
 }
