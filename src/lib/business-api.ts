@@ -97,9 +97,48 @@ export type ScanResponse = {
     | "INVALID_TOKEN"
     | "TICKET_NOT_FOUND";
   message: string;
+  /** Moyen de paiement du repas validé : ticket déjà acheté ou solde du portefeuille. */
+  paymentMethod?: "TICKET" | "WALLET";
   balance?: number;
   amount?: number;
   currency?: "XOF";
+};
+
+export type CodificationStatus =
+  | "NOT_STARTED"
+  | "DOCUMENTS_SUBMITTED"
+  | "DOCUMENTS_APPROVED"
+  | "DOCUMENTS_REJECTED"
+  | "BED_SELECTED";
+
+export type MyCodification = {
+  studentNumber: string | null;
+  codificationStatus: CodificationStatus;
+  documents: Array<{
+    id: string;
+    type: "CNI" | "STUDENT_CARD" | string;
+    fileName: string | null;
+    status: DocumentStatus;
+    rejectionReason: string | null;
+    createdAt: string;
+  }>;
+  assignment: {
+    id: string;
+    createdAt: string;
+    bed: {
+      label: string;
+      room: { number: string; floor: number; pavilion: { name: string } };
+    };
+  } | null;
+};
+
+export type AvailableTickets = Record<MealService, number> & { total: number };
+
+export type MealHistoryItem = {
+  id: string;
+  service: MealService;
+  date: string;
+  createdAt: string;
 };
 
 export type QrTokenResponse = {
@@ -200,17 +239,24 @@ export async function getBeds(filters: BedFilters): Promise<Bed[]> {
   );
 }
 
-export async function reserveBed(
-  bedId: string,
-  studentNumber: string,
-): Promise<ApiResultMessage> {
+// L’étudiant est identifié par son jeton : aucun matricule n’est envoyé.
+export async function reserveBed(bedId: string): Promise<ApiResultMessage> {
   return apiRequest<ApiResultMessage>(
     `codification/beds/${encodeURIComponent(bedId)}/reserve`,
-    {
-      method: "POST",
-      body: JSON.stringify({ studentNumber }),
-    },
+    { method: "POST" },
   );
+}
+
+export async function getMyCodification(): Promise<MyCodification> {
+  return apiRequest<MyCodification>("codification/me");
+}
+
+export async function getAvailableTickets(): Promise<AvailableTickets> {
+  return apiRequest<AvailableTickets>("tickets/available");
+}
+
+export async function getMealHistory(): Promise<MealHistoryItem[]> {
+  return apiRequest<MealHistoryItem[]>("tickets/meals");
 }
 
 export async function getAdminDocuments(): Promise<CodificationDocument[]> {
@@ -244,16 +290,9 @@ export async function importCodifiableStudents(file: File): Promise<{
   return uploadForm("codification/import", formData);
 }
 
-export async function downloadDocument(
-  documentId: string,
-  studentNumber: string,
-  isAdmin: boolean,
-): Promise<Blob> {
-  const query = new URLSearchParams({
-    studentNumber,
-    ...(isAdmin ? { isAdmin: "true" } : {}),
-  });
+// Le serveur vérifie lui-même que le jeton appartient au titulaire du document ou à un administrateur.
+export async function downloadDocument(documentId: string): Promise<Blob> {
   return apiRequestBlob(
-    `codification/documents/${encodeURIComponent(documentId)}/download?${query}`,
+    `codification/documents/${encodeURIComponent(documentId)}/download`,
   );
 }

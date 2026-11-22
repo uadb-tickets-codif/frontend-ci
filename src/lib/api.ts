@@ -58,24 +58,47 @@ export function clearAccessToken(): void {
   }
 }
 
+// Messages génériques de NestJS : peu utiles à afficher tels quels à l’utilisateur.
+const GENERIC_SERVER_MESSAGES = new Set([
+  "Bad Request",
+  "Unauthorized",
+  "Forbidden",
+  "Forbidden resource",
+  "Not Found",
+  "Conflict",
+  "Too Many Requests",
+  "Internal Server Error",
+  "Payload Too Large",
+]);
+
 function getErrorMessage(status: number, payload?: ApiErrorPayload): string {
+  if (status >= 500) {
+    return "Le service est temporairement indisponible. Réessayez plus tard.";
+  }
   if (status === 401) {
     return "Identifiants invalides ou session expirée.";
   }
-  if (status === 403) {
-    return "Accès refusé.";
+
+  // Le serveur explique précisément les refus métier (lit déjà pris, dossier non
+  // validé, document refusé…) : on affiche son message plutôt qu’un texte générique.
+  // Les erreurs de validation (tableau de messages techniques) restent génériques.
+  const serverMessage =
+    typeof payload?.message === "string" &&
+    !GENERIC_SERVER_MESSAGES.has(payload.message)
+      ? payload.message.trim()
+      : "";
+  if (serverMessage) {
+    return serverMessage;
   }
+
+  if (status === 403) return "Accès refusé.";
+  if (status === 404) return "Élément introuvable.";
   if (status === 409) {
-    return "Cette adresse e-mail ou ce numéro étudiant est déjà utilisé.";
+    return "Cette opération est en conflit avec l’état actuel des données.";
   }
-  if (typeof payload?.message === "string") {
-    return payload.message;
-  }
-  if (Array.isArray(payload?.message)) {
-    return payload.message.join(" ");
-  }
-  if (status >= 500) {
-    return "Le service est temporairement indisponible. Réessayez plus tard.";
+  if (status === 413) return "Le fichier est trop volumineux (5 Mo maximum).";
+  if (status === 429) {
+    return "Trop de tentatives. Patientez quelques minutes avant de réessayer.";
   }
   if (status === 400 || status === 422) {
     return "Les informations saisies sont invalides. Vérifiez les champs.";

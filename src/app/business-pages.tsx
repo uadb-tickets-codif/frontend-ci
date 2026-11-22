@@ -8,8 +8,11 @@ import {
   createQrToken,
   downloadDocument,
   getAdminDocuments,
+  getAvailableTickets,
   getBeds,
+  getMealHistory,
   getMealPrices,
+  getMyCodification,
   getWallet,
   getWalletTransactions,
   importCodifiableStudents,
@@ -22,8 +25,10 @@ import {
   verifyStudentEligibility,
   type Bed,
   type CodificationDocument,
+  type CodificationStatus,
   type DocumentStatus,
   type EligibilityResult,
+  type MealHistoryItem,
   type MealService,
   type QrTokenResponse,
   type ScanResponse,
@@ -38,6 +43,8 @@ type Props = {
   screen: BusinessScreen;
   user: AuthUser;
   onNavigate: (screen: BusinessScreen) => void;
+  /** Recharge le profil connecté (ex. après le rattachement du numéro étudiant). */
+  onUserRefresh: () => Promise<void>;
 };
 
 const mealNames: Record<MealService, string> = {
@@ -45,6 +52,30 @@ const mealNames: Record<MealService, string> = {
   LUNCH: "Déjeuner",
   DINNER: "Dîner",
 };
+
+const codificationLabels: Record<CodificationStatus, string> = {
+  NOT_STARTED: "Non commencée",
+  DOCUMENTS_SUBMITTED: "Documents en attente de validation",
+  DOCUMENTS_APPROVED: "Documents validés",
+  DOCUMENTS_REJECTED: "Documents rejetés",
+  BED_SELECTED: "Lit réservé",
+};
+
+const documentTypeLabels: Record<string, string> = {
+  CNI: "CNI",
+  STUDENT_CARD: "Carte étudiant",
+};
+
+const documentStatusLabels: Record<DocumentStatus, string> = {
+  PENDING: "En attente",
+  APPROVED: "Validé",
+  REJECTED: "Rejeté",
+};
+
+const codificationLabel = (status: string) =>
+  codificationLabels[status as CodificationStatus] ?? status;
+
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 const currency = (amount: number) =>
   `${new Intl.NumberFormat("fr-FR").format(amount)} FCFA`;
@@ -123,13 +154,14 @@ function TransactionList({ transactions }: { transactions: WalletTransaction[] }
 function StudentDashboard({ user, onNavigate }: { user: AuthUser; onNavigate: (screen: BusinessScreen) => void }) {
   const wallet = useLoad(getWallet);
   const transactions = useLoad(getWalletTransactions);
-  const status = user.codificationStatus || "Non renseigné";
+  const tickets = useLoad(getAvailableTickets);
+  const status = codificationLabel(user.codificationStatus || "NOT_STARTED");
   return <div className="page-stack">
     <Intro eyebrow="ESPACE ÉTUDIANT" title={`Bonjour, ${user.firstName}`} subtitle="Vos services étudiants, reliés à votre compte." />
     <div className="stats-grid">
       <article className="stat-card"><span>Solde portefeuille</span><strong>{wallet.loading ? "Chargement…" : wallet.data ? currency(wallet.data.balance) : "Indisponible"}</strong>{wallet.error && <ErrorMessage>{wallet.error}</ErrorMessage>}</article>
       <article className="stat-card"><span>Codification</span><strong>{status}</strong></article>
-      <article className="stat-card"><span>Tickets disponibles</span><strong>Non fourni par l’API</strong></article>
+      <article className="stat-card"><span>Tickets disponibles</span><strong>{tickets.loading ? "Chargement…" : tickets.data ? tickets.data.total : "Indisponible"}</strong>{tickets.data && tickets.data.total > 0 && <small>{(Object.keys(mealNames) as MealService[]).filter((meal) => tickets.data![meal] > 0).map((meal) => `${mealNames[meal]} : ${tickets.data![meal]}`).join(" · ")}</small>}</article>
     </div>
     <section className="content-card">
       <h2>Services</h2>
@@ -147,7 +179,26 @@ function StudentDashboard({ user, onNavigate }: { user: AuthUser; onNavigate: (s
   </div>;
 }
 
-function WalletPage({ screen }: { screen: "achat" | "recharge" | "historique" }) {
+function HistoryPage() {
+  const transactions = useLoad(getWalletTransactions);
+  const meals = useLoad(getMealHistory);
+  return <div className="page-stack">
+    <Intro eyebrow="ESPACE ÉTUDIANT" title="Historique" subtitle="Vos opérations de portefeuille et vos repas pris au restaurant." />
+    <section className="content-card"><h2>Transactions</h2>{transactions.loading ? <p>Chargement…</p> : transactions.error ? <ErrorMessage>{transactions.error}</ErrorMessage> : <TransactionList transactions={transactions.data ?? []} />}</section>
+    <section className="content-card"><h2>Repas pris</h2>{meals.loading ? <p>Chargement…</p> : meals.error ? <ErrorMessage>{meals.error}</ErrorMessage> : <MealList meals={meals.data ?? []} />}</section>
+  </div>;
+}
+
+function MealList({ meals }: { meals: MealHistoryItem[] }) {
+  if (!meals.length) return <p>Aucun repas pris pour le moment.</p>;
+  return <div className="transaction-list">{meals.map((meal) => (
+    <article className="transaction-row" key={meal.id}>
+      <span className="transaction-description"><strong>{mealNames[meal.service]}</strong><small>{formatDate(meal.createdAt)}</small></span>
+    </article>
+  ))}</div>;
+}
+
+function WalletPage({ screen }: { screen: "achat" | "recharge" }) {
   const [amount, setAmount] = useState(2000);
   const [service, setService] = useState<MealService>("BREAKFAST");
   const [quantity, setQuantity] = useState(1);
@@ -181,13 +232,6 @@ function WalletPage({ screen }: { screen: "achat" | "recharge" | "historique" })
     }
   };
 
-  if (screen === "historique") return <div className="page-stack">
-    <Intro eyebrow="ESPACE ÉTUDIANT" title="Historique des transactions" subtitle="Opérations de portefeuille renvoyées par le serveur." />
-    <section className="content-card"><h2>Transactions</h2>{transactions.loading ? <p>Chargement…</p> : transactions.error ? <ErrorMessage>{transactions.error}</ErrorMessage> : <TransactionList transactions={transactions.data ?? []} />}
-      <Notice>L’API ne fournit pas encore d’historique distinct des repas consommés.</Notice>
-    </section>
-  </div>;
-
   return <div className="page-stack">
     <Intro eyebrow="PORTEFEUILLE ÉTUDIANT" title={screen === "achat" ? "Acheter des tickets repas" : "Recharger le portefeuille"} subtitle={screen === "achat" ? "Les tarifs et l’achat sont fournis par le backend." : "Recharge simulée par le backend ; Wave et Orange Money ne sont pas encore connectés."} />
     <form className="content-card" onSubmit={(event) => void submit(event)}>
@@ -217,6 +261,7 @@ function WalletPage({ screen }: { screen: "achat" | "recharge" | "historique" })
 
 function QrPage() {
   const wallet = useLoad(getWallet);
+  const tickets = useLoad(getAvailableTickets);
   const [token, setToken] = useState<QrTokenResponse | null>(null);
   const [image, setImage] = useState("");
   const [error, setError] = useState("");
@@ -251,13 +296,15 @@ function QrPage() {
       {error ? <ErrorMessage>{error}</ErrorMessage> : image ? <Image src={image} alt="QR code temporaire de ticket repas" width={240} height={240} unoptimized /> : <p>Génération du QR code…</p>}
       <p>Expiration : {token ? `${Math.floor(seconds / 60)} min ${seconds % 60} s` : "—"}</p>
       <p>Solde : {wallet.data ? currency(wallet.data.balance) : wallet.loading ? "Chargement…" : "Indisponible"}</p>
+      <p>Tickets disponibles : {tickets.data ? tickets.data.total : tickets.loading ? "Chargement…" : "Indisponible"}</p>
       {wallet.error && <ErrorMessage>{wallet.error}</ErrorMessage>}
       <button className="outline-button" type="button" disabled={!token} onClick={() => void refresh()}>Renouveler le code</button>
     </section>
   </div>;
 }
 
-function CodificationPage({ user }: { user: AuthUser }) {
+function CodificationPage({ user, onUserRefresh }: { user: AuthUser; onUserRefresh: () => Promise<void> }) {
+  const me = useLoad(getMyCodification);
   const [studentNumber, setStudentNumber] = useState(user.studentNumber ?? "");
   const [birthDate, setBirthDate] = useState("");
   const [eligibility, setEligibility] = useState<EligibilityResult | null>(null);
@@ -266,16 +313,26 @@ function CodificationPage({ user }: { user: AuthUser }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const gender = user.gender;
-  const beds = useLoad(useCallback(() => getBeds({ gender: gender || undefined, status: "AVAILABLE" }), [gender]));
+
+  const status: CodificationStatus = me.data?.codificationStatus ?? (user.codificationStatus as CodificationStatus);
+  const linkedNumber = me.data?.studentNumber ?? user.studentNumber;
+  const canEditDocuments = status === "NOT_STARTED" || status === "DOCUMENTS_SUBMITTED" || status === "DOCUMENTS_REJECTED";
+  const canChooseBed = status === "DOCUMENTS_APPROVED";
+  const loadBeds = useCallback(() => canChooseBed ? getBeds({ status: "AVAILABLE" }) : Promise.resolve([] as Bed[]), [canChooseBed]);
+  const beds = useLoad(loadBeds);
+
+  async function refreshAll() {
+    await Promise.all([me.refresh(), onUserRefresh()]);
+  }
 
   async function verify(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(""); setMessage(""); setBusy(true);
     try {
-      const result = await verifyStudentEligibility(studentNumber, birthDate);
+      const result = await verifyStudentEligibility(studentNumber.trim(), birthDate);
       setEligibility(result);
       setMessage(result.message);
+      await refreshAll();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "La vérification a échoué.");
     } finally { setBusy(false); }
@@ -284,14 +341,16 @@ function CodificationPage({ user }: { user: AuthUser }) {
   async function submitDocuments(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!cni || !studentCard) { setError("Sélectionnez les deux documents requis."); return; }
+    if (cni.size > MAX_UPLOAD_BYTES || studentCard.size > MAX_UPLOAD_BYTES) { setError("Chaque document doit faire 5 Mo au maximum."); return; }
     setError(""); setMessage(""); setBusy(true);
     try {
       const data = new FormData();
-      data.append("studentNumber", studentNumber);
       data.append("cni", cni);
       data.append("studentCard", studentCard);
       const response = await uploadForm<{ message?: string }>("codification/upload-documents", data);
       setMessage(response.message ?? "Documents transmis au serveur.");
+      setCni(null); setStudentCard(null);
+      await refreshAll();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Le dépôt des documents a échoué.");
     } finally { setBusy(false); }
@@ -300,41 +359,57 @@ function CodificationPage({ user }: { user: AuthUser }) {
   async function chooseBed(bed: Bed) {
     setError(""); setMessage("");
     try {
-      const result = await reserveBed(bed.id, studentNumber);
+      const result = await reserveBed(bed.id);
       setMessage(result.message);
-      await beds.refresh();
+      await Promise.all([beds.refresh(), refreshAll()]);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "La réservation a échoué.");
+      await beds.refresh();
     }
   }
 
   return <div className="page-stack">
-    <Intro eyebrow="CODIFICATION ÉTUDIANTE" title="Vérification et logement" subtitle="Vérifiez votre éligibilité, déposez vos pièces puis consultez les lits disponibles." />
-    <form className="content-card" onSubmit={(event) => void verify(event)}>
+    <Intro eyebrow="CODIFICATION ÉTUDIANTE" title="Vérification et logement" subtitle="Vérifiez votre éligibilité, déposez vos pièces, puis réservez un lit une fois votre dossier validé." />
+    {me.error && <ErrorMessage>{me.error}</ErrorMessage>}
+    {error && <ErrorMessage>{error}</ErrorMessage>}{message && <Notice>{message}</Notice>}
+
+    <section className="content-card">
+      <h2>Votre dossier</h2>
+      <p><strong>Statut : </strong>{codificationLabel(status)}</p>
+      {linkedNumber && <p><strong>Numéro étudiant : </strong>{linkedNumber}</p>}
+      {me.data?.documents.length ? me.data.documents.map((document) => <article className="transaction-row" key={document.id}>
+        <span className="transaction-description"><strong>{documentTypeLabels[document.type] ?? document.type}</strong><small>{document.fileName ?? "Fichier"} · {formatDate(document.createdAt)}</small>{document.status === "REJECTED" && document.rejectionReason && <small>Motif du rejet : {document.rejectionReason}</small>}</span>
+        <span className={`transaction-status${document.status === "APPROVED" ? " transaction-status-success" : document.status === "REJECTED" ? " transaction-status-failure" : ""}`}>{documentStatusLabels[document.status]}</span>
+      </article>) : me.loading ? <p>Chargement…</p> : <p>Aucun document déposé pour le moment.</p>}
+      {me.data?.assignment && <p><strong>Votre lit : </strong>{me.data.assignment.bed.room.pavilion.name} · étage {me.data.assignment.bed.room.floor} · chambre {me.data.assignment.bed.room.number} · lit {me.data.assignment.bed.label}</p>}
+    </section>
+
+    {!me.loading && !linkedNumber && <form className="content-card" onSubmit={(event) => void verify(event)}>
       <h2>1. Vérifier l’éligibilité</h2>
+      <p>Votre numéro étudiant sera rattaché à votre compte si votre date de naissance correspond à la liste officielle.</p>
       <label>Numéro étudiant<input value={studentNumber} onChange={(event) => setStudentNumber(event.target.value)} required /></label>
       <label>Date de naissance<input type="date" value={birthDate} onChange={(event) => setBirthDate(event.target.value)} required /></label>
       <button className="primary-button" disabled={busy} type="submit">{busy ? "Vérification…" : "Vérifier"}</button>
       {eligibility && <p>{eligibility.eligible ? "Éligible" : "Non éligible"} — {eligibility.student.firstName} {eligibility.student.lastName}</p>}
-      {error && <ErrorMessage>{error}</ErrorMessage>}{message && <Notice>{message}</Notice>}
-    </form>
-    {eligibility?.eligible && <>
-      <form className="content-card" onSubmit={(event) => void submitDocuments(event)}>
-        <h2>2. Déposer les documents</h2>
-        <label>CNI (PDF, JPG ou PNG, 5 Mo max)<input type="file" accept=".pdf,.jpg,.jpeg,.png" required onChange={(event) => setCni(event.target.files?.[0] ?? null)} /></label>
-        <label>Carte étudiant (PDF, JPG ou PNG, 5 Mo max)<input type="file" accept=".pdf,.jpg,.jpeg,.png" required onChange={(event) => setStudentCard(event.target.files?.[0] ?? null)} /></label>
-        <button className="primary-button" disabled={busy} type="submit">Envoyer les documents</button>
-      </form>
-      <section className="content-card">
-        <h2>3. Choisir un lit</h2>
-        <p>Les lits affichés correspondent aux pavillons réservés à votre genre.</p>
-        {beds.loading ? <p>Chargement des lits…</p> : beds.error ? <ErrorMessage>{beds.error}</ErrorMessage> : beds.data?.length ? beds.data.map((bed) => <article className="transaction-row" key={bed.id}>
-          <span>{bed.room.pavilion.name} · étage {bed.room.floor} · chambre {bed.room.number} · lit {bed.label}</span>
-          <button className="outline-button" type="button" onClick={() => void chooseBed(bed)}>Réserver</button>
-        </article>) : <p>Aucun lit disponible pour ces filtres.</p>}
-      </section>
-    </>}
-    <Notice>Le backend n’expose pas encore de consultation du statut des documents côté étudiant. La réservation est soumise à la validation serveur.</Notice>
+    </form>}
+
+    {linkedNumber && canEditDocuments && <form className="content-card" onSubmit={(event) => void submitDocuments(event)}>
+      <h2>2. {status === "NOT_STARTED" ? "Déposer les documents" : "Remplacer les documents"}</h2>
+      <p>Les deux pièces sont requises à chaque dépôt ; elles remplacent les précédentes.</p>
+      <label>CNI (PDF, JPG ou PNG, 5 Mo max)<input type="file" accept=".pdf,.jpg,.jpeg,.png" required onChange={(event) => setCni(event.target.files?.[0] ?? null)} /></label>
+      <label>Carte étudiant (PDF, JPG ou PNG, 5 Mo max)<input type="file" accept=".pdf,.jpg,.jpeg,.png" required onChange={(event) => setStudentCard(event.target.files?.[0] ?? null)} /></label>
+      <button className="primary-button" disabled={busy} type="submit">{busy ? "Envoi…" : "Envoyer les documents"}</button>
+    </form>}
+
+    {canChooseBed && <section className="content-card">
+      <h2>3. Choisir un lit</h2>
+      <p>Seuls les lits des pavillons correspondant à votre genre sont proposés.</p>
+      {beds.loading ? <p>Chargement des lits…</p> : beds.error ? <ErrorMessage>{beds.error}</ErrorMessage> : beds.data?.length ? beds.data.map((bed) => <article className="transaction-row" key={bed.id}>
+        <span>{bed.room.pavilion.name} · étage {bed.room.floor} · chambre {bed.room.number} · lit {bed.label}</span>
+        <button className="outline-button" type="button" onClick={() => void chooseBed(bed)}>Réserver</button>
+      </article>) : <p>Aucun lit disponible pour le moment.</p>}
+    </section>}
+    {status === "DOCUMENTS_SUBMITTED" && <Notice>Vos documents sont en cours de vérification par l’administration. Revenez consulter cette page pour réserver votre lit.</Notice>}
   </div>;
 }
 
@@ -416,6 +491,7 @@ function ControllerPage() {
       {error && <ErrorMessage>{error}</ErrorMessage>}
       {result && <div className={`scan-result ${result.result === "OK" ? "scan-success" : "scan-failure"}`} aria-live="polite">
         <h2>{result.result === "OK" ? "Accès autorisé" : "Accès refusé"}</h2><p>{result.message}</p>
+        {result.paymentMethod && <p>Payé avec : {result.paymentMethod === "TICKET" ? "un ticket déjà acheté" : "le solde du portefeuille"}</p>}
         {result.balance !== undefined && <p>Solde : {currency(result.balance)}</p>}
       </div>}
     </section>
@@ -428,7 +504,9 @@ function DocumentsAdmin() {
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [reason, setReason] = useState("");
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [onlyPending, setOnlyPending] = useState(true);
+  const visibleDocuments = (documents.data ?? []).filter((document) => !onlyPending || document.status === "PENDING");
 
   async function importCsv(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -443,7 +521,7 @@ function DocumentsAdmin() {
   async function review(document: CodificationDocument, status: Exclude<DocumentStatus, "PENDING">) {
     setBusyId(document.id); setError(""); setMessage("");
     try {
-      const result = await validateAdminDocument(document.id, status, status === "REJECTED" ? reason : undefined);
+      const result = await validateAdminDocument(document.id, status, status === "REJECTED" ? reasons[document.id]?.trim() : undefined);
       setMessage(result.message);
       await documents.refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : "La décision a échoué."); }
@@ -452,39 +530,38 @@ function DocumentsAdmin() {
 
   async function download(document: CodificationDocument) {
     try {
-      const blob = await downloadDocument(document.id, document.user.studentNumber ?? "", true);
+      const blob = await downloadDocument(document.id);
       const url = URL.createObjectURL(blob);
       const anchor = window.document.createElement("a");
       anchor.href = url;
       anchor.download = document.fileName ?? `document-${document.id}`;
       anchor.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Le téléchargement a échoué."); }
   }
 
   return <div className="page-stack">
     <Intro eyebrow="ADMINISTRATION" title="Codification et documents" subtitle="Importez les étudiants éligibles et traitez les pièces déposées." />
-    <Notice>À sécuriser côté backend avant tout usage en production : les routes d’administration et de téléchargement doivent vérifier le JWT et le rôle administrateur. Le masquage de l’interface ne protège pas ces routes.</Notice>
     <form className="content-card" onSubmit={(event) => void importCsv(event)}>
       <h2>Importer les étudiants éligibles (CSV)</h2>
-      <p>Colonnes requises par le serveur : numéro étudiant, nom, prénom, date de naissance, genre, niveau et e-mail.</p>
+      <p>Colonnes requises : numéro étudiant, nom, prénom, date de naissance (AAAA-MM-JJ ou JJ/MM/AAAA), genre (M ou F), niveau et e-mail. Un fichier invalide n’est pas du tout enregistré, et le message indique la ligne en cause.</p>
       <input type="file" accept=".csv,text/csv" onChange={(event) => setCsv(event.target.files?.[0] ?? null)} required />
       <button className="primary-button" disabled={!csv} type="submit">Importer le fichier</button>
     </form>
     {message && <Notice>{message}</Notice>}{error && <ErrorMessage>{error}</ErrorMessage>}
     <section className="content-card">
-      <h2>Dossiers en attente</h2>
-      {documents.loading ? <p>Chargement…</p> : documents.error ? <ErrorMessage>{documents.error}</ErrorMessage> : documents.data?.length ? documents.data.map((document) => <article className="content-card" key={document.id}>
+      <div className="section-heading"><h2>{onlyPending ? "Dossiers en attente" : "Tous les documents"}</h2><label className="checkbox-row"><input type="checkbox" checked={onlyPending} onChange={(event) => setOnlyPending(event.target.checked)} /> Afficher seulement les documents en attente</label></div>
+      {documents.loading ? <p>Chargement…</p> : documents.error ? <ErrorMessage>{documents.error}</ErrorMessage> : visibleDocuments.length ? visibleDocuments.map((document) => <article className="content-card" key={document.id}>
         <h3>{document.user.firstName} {document.user.lastName} · {document.user.studentNumber ?? "Sans matricule"}</h3>
-        <p>{document.type} · {document.fileName ?? "Nom de fichier inconnu"} · {document.status}</p>
+        <p>{documentTypeLabels[document.type] ?? document.type} · {document.fileName ?? "Nom de fichier inconnu"} · {documentStatusLabels[document.status]}</p>
         {document.rejectionReason && <p>Motif : {document.rejectionReason}</p>}
         <button className="outline-button" type="button" onClick={() => void download(document)}>Télécharger</button>
         {document.status === "PENDING" && <>
           <button className="outline-button" disabled={busyId === document.id} type="button" onClick={() => void review(document, "APPROVED")}>Approuver</button>
-          <label>Motif de rejet<input value={reason} onChange={(event) => setReason(event.target.value)} /></label>
-          <button className="outline-button" disabled={busyId === document.id || !reason.trim()} type="button" onClick={() => void review(document, "REJECTED")}>Rejeter</button>
+          <label>Motif de rejet<input value={reasons[document.id] ?? ""} onChange={(event) => setReasons((current) => ({ ...current, [document.id]: event.target.value }))} /></label>
+          <button className="outline-button" disabled={busyId === document.id || !reasons[document.id]?.trim()} type="button" onClick={() => void review(document, "REJECTED")}>Rejeter</button>
         </>}
-      </article>) : <p>Aucun document à traiter.</p>}
+      </article>) : <p>{onlyPending ? "Aucun document en attente." : "Aucun document déposé."}</p>}
     </section>
   </div>;
 }
@@ -498,14 +575,14 @@ function AdminHome() {
   </div>;
 }
 
-export default function BusinessPages({ screen, user, onNavigate }: Props) {
+export default function BusinessPages({ screen, user, onNavigate, onUserRefresh }: Props) {
   switch (screen) {
     case "etudiant": return <StudentDashboard user={user} onNavigate={onNavigate} />;
     case "achat":
-    case "recharge":
-    case "historique": return <WalletPage screen={screen} />;
+    case "recharge": return <WalletPage screen={screen} />;
+    case "historique": return <HistoryPage />;
     case "qr": return <QrPage />;
-    case "codification": return <CodificationPage user={user} />;
+    case "codification": return <CodificationPage user={user} onUserRefresh={onUserRefresh} />;
     case "controleur": return <ControllerPage />;
     case "admin": return <AdminHome />;
     case "dossiers": return <DocumentsAdmin />;

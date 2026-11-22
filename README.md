@@ -30,7 +30,7 @@ Le QR code ne contient aucune donnée de solde : le solde est lu côté serveur 
 
 ### État de l'intégration avec l'API
 
-L'interface a d'abord été développée en mode démonstration (données en mémoire), puis branchée progressivement sur l'API du dépôt [backend-ci](https://github.com/uadb-tickets-codif/backend-ci). La connexion et l'inscription utilisent l'API réelle avec les jetons JWT. Les écrans dont l'intégration n'est pas terminée restent en mode démonstration : leurs données sont alors locales et se réinitialisent au rechargement de la page.
+Tous les écrans (étudiant, contrôleur, administration) utilisent l'API réelle du dépôt [backend-ci](https://github.com/uadb-tickets-codif/backend-ci) avec les jetons JWT. Les anciens écrans de démonstration ont été supprimés. L'écran affiché est reflété dans l'URL (`#codification`, `#qr`…) : l'actualisation de la page et le bouton retour du navigateur fonctionnent. Les messages d'erreur précis du serveur (lit déjà pris, dossier non validé…) sont affichés tels quels.
 
 ## Prérequis
 
